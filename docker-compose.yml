@@ -1,0 +1,85 @@
+# 店端：后台 + 商城。数据库不在这个文件里。
+# 自带 MySQL / Redis / RabbitMQ 时，安装脚本会写 docker-compose.override.yml。
+# 使用已有容器时，override 只把店端接到那些容器所在的网络。
+# docker compose --env-file .env up -d
+name: faka-tenant
+
+services:
+  tenant:
+    image: ${TENANT_IMAGE:-faka/tenant:1.0.0}
+    container_name: faka-tenant
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER:-faka}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      TENANT_ADMIN_JWT_SECRET: ${TENANT_ADMIN_JWT_SECRET}
+      TENANT_SHOP_JWT_SECRET: ${TENANT_SHOP_JWT_SECRET}
+      FAKA_CARD_KEY: ${FAKA_CARD_KEY}
+      UPDATER_URL: ${UPDATER_URL:-http://updater:8791}
+      UPDATER_TOKEN: ${UPDATER_TOKEN:-}
+      MASTER_BASE_URL: ${MASTER_BASE_URL}
+      LICENSE_KEY: ${LICENSE_KEY}
+      SHOP_DOMAIN: ${SHOP_DOMAIN}
+      PAY_PUBLIC_BASE_URL: ${PAY_PUBLIC_BASE_URL}
+      TENANT_SEED_PASS: ${SEED_TENANT_PASS}
+    volumes:
+      # 挂目录而不是单文件，配置可写
+      - ./config:/app/configs
+      - uploads:/app/uploads
+    networks:
+      - faka
+
+  updater:
+    image: ${UPDATER_IMAGE:-faka/tenant-updater:1.0.0}
+    container_name: faka-tenant-updater
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      HOME: /root
+      UPDATER_TOKEN: ${UPDATER_TOKEN:-}
+      STACK_DIR: ${INSTALL_DIR:-/opt/faka-tenant}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 挂到宿主机同一路径，compose 才会把相对目录解析成这台机器上的安装目录
+      - ${INSTALL_DIR:-/opt/faka-tenant}:${INSTALL_DIR:-/opt/faka-tenant}
+      # 私有仓库的 docker login 在宿主机上。只读挂进来，拉取前复制到可写目录。
+      - ${DOCKER_CONFIG_DIR:-/root/.docker}:/host-docker-config:ro
+    networks:
+      - faka
+
+  web:
+    image: ${WEB_IMAGE:-faka/tenant-web:1.0.0}
+    container_name: faka-tenant-web
+    restart: unless-stopped
+    depends_on:
+      - tenant
+    environment:
+      TZ: Asia/Shanghai
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN}
+      SHOP_DOMAIN: ${SHOP_DOMAIN}
+      # 只替换域名变量；nginx.conf.template 里的 $uri/$host 必须保持单 $
+      NGINX_ENVSUBST_FILTER: DOMAIN
+    ports:
+      - "127.0.0.1:${HTTP_BIND:-29101}:29101"
+    networks:
+      - faka
+      - proxy
+
+volumes:
+  uploads:
+
+networks:
+  faka:
+    driver: bridge
+  # 1Panel 的 OpenResty 在 1panel-network 上。安装脚本发现该网络时把它标成 external。
+  proxy:
+    name: ${PROXY_NETWORK:-faka-tenant-proxy}
+    external: ${PROXY_EXTERNAL:-false}
